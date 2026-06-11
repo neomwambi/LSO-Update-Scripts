@@ -1,0 +1,65 @@
+:root {
+  /* MobiLife-inspired (unique layout, same palette family) */
+  --ml-yellow: #fcd116;
+  --ml-yellow-dark: #deb408;
+  --ml-yellow-soft: rgba(252, 209, 22, 0.18);
+  --ml-yellow-border: rgba(252, 209, 22, 0.85);
+  --ml-slate: #2c2e3e;
+  --ml-slate-soft: #5a5f73;
+  --sidebar-bg: #eef1f6;
+  --main-bg: #f8f9fb;
+  --surface: #ffffff;
+  --text: #5a5f73;
+  --text-heading: #2c2e3e;
+  --border: #e2e5eb;
+  --code-bg: #f0f2f7;
+  --shadow-sm: 0 1px 3px rgba(44, 46, 62, 0.06);
+  --shadow-md: 0 8px 24px rgba(44, 46, 62, 0.08);
+  --radius: 12px;
+
+  --sans: 'Inter', system-ui, 'Segoe UI', Roboto, sans-serif;
+  --mono: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+
+  font: 16px/1.5 var(--sans);
+  color: var(--text);
+  background: var(--main-bg);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+#root {
+  min-height: 100svh;
+}
+
+body {
+  margin: 0;
+}
+
+h1,
+h2,
+h3 {
+  font-family: var(--sans);
+  font-weight: 600;
+  color: var(--text-heading);
+  letter-spacing: -0.02em;
+}
+
+p {
+  margin: 0;
+}
+
+code {
+  font-family: var(--mono);
+  font-size: 0.88em;
+  padding: 0.15em 0.4em;
+  border-radius: 4px;
+  background: var(--code-bg);
+  color: var(--text-heading);
+}
