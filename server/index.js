@@ -3,6 +3,11 @@ import cors from 'cors';
 import multer from 'multer';
 import os from 'os';
 import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const distPath = path.join(__dirname, '..', 'dist');
 import {
   getPool,
   testConnection,
@@ -112,8 +117,28 @@ app.post('/api/process', upload.single('file'), async (req, res) => {
   }
 });
 
+if (fs.existsSync(distPath)) {
+  app.use(express.static(distPath));
+  app.get(/^(?!\/api).*/, (req, res, next) => {
+    if (req.method !== 'GET' && req.method !== 'HEAD') return next();
+    res.sendFile(path.join(distPath, 'index.html'), (err) => {
+      if (err) next(err);
+    });
+  });
+} else {
+  app.get('/', (req, res) => {
+    res
+      .type('text/plain')
+      .send(
+        'LSO API is running. UI not built yet: run npm run build so dist/ exists before deploy.'
+      );
+  });
+}
+
 const PORT = Number(process.env.PORT || 3001);
-const LISTEN_HOST = process.env.LISTEN_HOST || '127.0.0.1';
+const LISTEN_HOST =
+  process.env.LISTEN_HOST || (process.env.WEBSITE_SITE_NAME ? '0.0.0.0' : '127.0.0.1');
 app.listen(PORT, LISTEN_HOST, () => {
-  console.log(`LSO benefit update API: http://${LISTEN_HOST}:${PORT}`);
+  const ui = fs.existsSync(distPath) ? 'UI + API' : 'API only (no dist/)';
+  console.log(`LSO benefit update (${ui}): http://${LISTEN_HOST}:${PORT}`);
 });
