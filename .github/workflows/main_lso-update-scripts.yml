@@ -52,4 +52,4 @@ jobs:
           app-name: 'LSO-Update-Scripts'
           slot-name: 'Production'
           package: .
-          publish-profile: ${{ secrets.AZUREAPPSERVICE_PUBLISHPROFILE_5F7371ABC91E4777A69F8551CF57BAB2 }}
+          publish-profile: ${{ secrets.AZUREAPPSERVICE_PUBLISHPROFILE_4992D8E2FBFA4CA49A178B6D83AA3348 }}
