@@ -30,16 +30,21 @@ export function classifyPolicyRolePlayerIds(rpDob, rpId) {
   for (const { ids } of rpId.values()) {
     ids.forEach((id) => idIds.add(id));
   }
+  return classifyFromChangingIdSets(dobIds, idIds);
+}
+
+/** Classify SearchMetaInfo targets from sets that would actually change (live DB or Excel intent). */
+export function classifyFromChangingIdSets(dobChangingIds, idChangingIds) {
   const both = new Set();
-  for (const id of dobIds) {
-    if (idIds.has(id)) both.add(id);
+  for (const id of dobChangingIds) {
+    if (idChangingIds.has(id)) both.add(id);
   }
   const dobOnly = new Set();
-  for (const id of dobIds) {
+  for (const id of dobChangingIds) {
     if (!both.has(id)) dobOnly.add(id);
   }
   const idOnly = new Set();
-  for (const id of idIds) {
+  for (const id of idChangingIds) {
     if (!both.has(id)) idOnly.add(id);
   }
   return { dobOnly, idOnly, both };
@@ -49,17 +54,13 @@ export function classifyPolicyRolePlayerIds(rpDob, rpId) {
  * @param {Map<number, { idNumber: string|null, dobSql: string|null, label?: string }>} byIndividual
  */
 export function classifyIndividualIds(byIndividual) {
-  const both = new Set();
-  const idOnly = new Set();
-  const dobOnly = new Set();
+  const dobIds = new Set();
+  const idIds = new Set();
   for (const [iid, t] of byIndividual) {
-    const hi = Boolean(t.idNumber);
-    const hd = Boolean(t.dobSql);
-    if (hi && hd) both.add(iid);
-    else if (hi) idOnly.add(iid);
-    else if (hd) dobOnly.add(iid);
+    if (t.dobSql) dobIds.add(iid);
+    if (t.idNumber) idIds.add(iid);
   }
-  return { dobOnly, idOnly, both };
+  return classifyFromChangingIdSets(dobIds, idIds);
 }
 
 /**
@@ -80,14 +81,21 @@ export function buildPolicyRolePlayerSearchMetaUpdate(c) {
     branches.push(`WHEN prp.Id IN (${formatInList(c.idOnly)}) THEN ${sqlLit(SEARCH_META.idOnly)}`);
   }
 
+  const metaCase = wrapCase(branches, 'prp.SearchMetaInfo');
+  const idList = formatInList(union);
+  const changeFilter = wouldChangeCondition('prp.SearchMetaInfo', metaCase);
   const sql = `UPDATE policies_prod.policyroleplayer prp
-SET prp.SearchMetaInfo =
-CASE
-${branches.join('\n')}
-ELSE prp.SearchMetaInfo END
-WHERE prp.Id IN (${formatInList(union)});`;
+SET prp.SearchMetaInfo = ${metaCase}
+WHERE prp.Id IN (${idList})
+  AND ${changeFilter};`;
 
-  return { sql, affectedIds: union };
+  return {
+    sql,
+    affectedIds: union,
+    countSql: countRowsSql(
+      `policies_prod.policyroleplayer prp WHERE prp.Id IN (${idList}) AND ${changeFilter}`
+    ),
+  };
 }
 
 /**
@@ -109,14 +117,20 @@ export function buildIndividualSearchMetaUpdate(c) {
   }
 
   const idsList = sortIds(union).join(',');
+  const metaCase = wrapCase(branches, 'i.SearchMetaInfo');
+  const changeFilter = wouldChangeCondition('i.SearchMetaInfo', metaCase);
   const sql = `UPDATE members_prod.individual i
-SET i.SearchMetaInfo =
-CASE
-${branches.join('\n')}
-ELSE i.SearchMetaInfo END
-WHERE i.Id IN (${idsList});`;
+SET i.SearchMetaInfo = ${metaCase}
+WHERE i.Id IN (${idsList})
+  AND ${changeFilter};`;
 
-  return { sql, affectedIds: union };
+  return {
+    sql,
+    affectedIds: union,
+    countSql: countRowsSql(
+      `members_prod.individual i WHERE i.Id IN (${idsList}) AND ${changeFilter}`
+    ),
+  };
 }
 
 /**
@@ -129,10 +143,18 @@ export function buildPolicySearchMetaUpdate(policyToId) {
     .map((pol) => `'${pol.replace(/'/g, "''")}'`)
     .join(',');
   const msg = sqlLit(SEARCH_META.policyIdOnly);
+  const changeFilter = wouldChangeCondition('p.SearchMetaInfo', msg);
   const sql = `UPDATE policies_prod.policy p
 SET p.SearchMetaInfo = ${msg}
-WHERE p.UniquePolicyNumber IN (${polList});`;
-  return { sql, policies: new Set(policyToId.keys()) };
+WHERE p.UniquePolicyNumber IN (${polList})
+  AND ${changeFilter};`;
+  return {
+    sql,
+    policies: new Set(policyToId.keys()),
+    countSql: countRowsSql(
+      `policies_prod.policy p WHERE p.UniquePolicyNumber IN (${polList}) AND ${changeFilter}`
+    ),
+  };
 }
 
 export function buildPreviewPolicyRolePlayerSearchMeta(c) {
@@ -252,6 +274,19 @@ function formatInList(ids) {
   return sortIds(ids).join(',');
 }
 
+/** Same row filter used in preview SELECTs: only rows where the new value differs. */
+function wouldChangeCondition(currentExpr, newExpr) {
+  return `(${currentExpr} <> ${newExpr} OR (${currentExpr} IS NULL AND ${newExpr} IS NOT NULL))`;
+}
+
+function wrapCase(branches, elseExpr) {
+  return `CASE\n${branches.join('\n')}\nELSE ${elseExpr} END`;
+}
+
+function countRowsSql(fromWhereSql) {
+  return `SELECT COUNT(*) AS cnt FROM ${fromWhereSql}`;
+}
+
 /**
  * @param {Map<string, { ids: Set<number>, label: string }>} groups - key = new DOB (YYYY-MM-DD)
  */
@@ -264,13 +299,20 @@ export function buildPolicyRolePlayerDobUpdate(groups) {
       ids.forEach((id) => allIds.add(id));
       return `WHEN prp.Id IN (${formatInList(ids)}) THEN '${dob}' -- ${sqlSafeComment(label)}`;
     });
+  const dobCase = wrapCase(branches, 'prp.DateOfBirth');
+  const idList = formatInList(allIds);
+  const changeFilter = wouldChangeCondition('prp.DateOfBirth', dobCase);
   const sql = `UPDATE policies_prod.policyroleplayer prp
-SET prp.DateOfBirth =
-CASE
-${branches.join('\n')}
-ELSE prp.DateOfBirth END
-WHERE prp.Id IN (${formatInList(allIds)});`;
-  return { sql, affectedIds: allIds };
+SET prp.DateOfBirth = ${dobCase}
+WHERE prp.Id IN (${idList})
+  AND ${changeFilter};`;
+  const whereClause = `policies_prod.policyroleplayer prp WHERE prp.Id IN (${idList}) AND ${changeFilter}`;
+  return {
+    sql,
+    affectedIds: allIds,
+    countSql: countRowsSql(whereClause),
+    changingIdsSql: `SELECT prp.Id AS Id FROM ${whereClause}`,
+  };
 }
 
 /**
@@ -286,21 +328,28 @@ export function buildPolicyRolePlayerIdUpdate(groups) {
       const esc = String(idNum).replace(/'/g, "''");
       return `WHEN prp.Id IN (${formatInList(ids)}) THEN '${esc}' -- ${sqlSafeComment(label)}`;
     });
+  const idCase = wrapCase(branches, 'prp.IDNumber');
+  const idList = formatInList(allIds);
+  const changeFilter = wouldChangeCondition('prp.IDNumber', idCase);
   const sql = `UPDATE policies_prod.policyroleplayer prp
-SET prp.IDNumber =
-CASE
-${branches.join('\n')}
-ELSE prp.IDNumber END
-WHERE prp.Id IN (${formatInList(allIds)});`;
-  return { sql, affectedIds: allIds };
+SET prp.IDNumber = ${idCase}
+WHERE prp.Id IN (${idList})
+  AND ${changeFilter};`;
+  const whereClause = `policies_prod.policyroleplayer prp WHERE prp.Id IN (${idList}) AND ${changeFilter}`;
+  return {
+    sql,
+    affectedIds: allIds,
+    countSql: countRowsSql(whereClause),
+    changingIdsSql: `SELECT prp.Id AS Id FROM ${whereClause}`,
+  };
 }
 
 /**
  * @param {Map<number, { idNumber: string|null, dobSql: string|null, label?: string }>} byIndividual
  */
-export function buildIndividualUpdate(byIndividual) {
+function buildIndividualCases(byIndividual) {
   const ids = [...byIndividual.keys()].sort((a, b) => a - b);
-  if (!ids.length) return { sql: '', affectedIds: new Set() };
+  if (!ids.length) return null;
 
   const idBranches = [];
   const dobBranches = [];
@@ -310,16 +359,12 @@ export function buildIndividualUpdate(byIndividual) {
   for (const iid of ids) {
     const t = byIndividual.get(iid);
     const comment = sqlSafeComment(t.label || `Individual ${iid}`);
-    if (needId) {
-      if (t.idNumber) {
-        const esc = String(t.idNumber).replace(/'/g, "''");
-        idBranches.push(`WHEN i.Id IN (${iid}) THEN '${esc}' -- ${comment}`);
-      }
+    if (needId && t.idNumber) {
+      const esc = String(t.idNumber).replace(/'/g, "''");
+      idBranches.push(`WHEN i.Id IN (${iid}) THEN '${esc}' -- ${comment}`);
     }
-    if (needDob) {
-      if (t.dobSql) {
-        dobBranches.push(`WHEN i.Id IN (${iid}) THEN '${t.dobSql}' -- ${comment}`);
-      }
+    if (needDob && t.dobSql) {
+      dobBranches.push(`WHEN i.Id IN (${iid}) THEN '${t.dobSql}' -- ${comment}`);
     }
   }
 
@@ -332,13 +377,40 @@ export function buildIndividualUpdate(byIndividual) {
       ? `CASE\n${dobBranches.join('\n')}\nELSE i.DateOfBirth END`
       : 'i.DateOfBirth';
 
+  return { ids, idList: ids.join(','), idCase, dobCase };
+}
+
+/**
+ * @param {Map<number, { idNumber: string|null, dobSql: string|null, label?: string }>} byIndividual
+ */
+export function buildIndividualUpdate(byIndividual) {
+  const spec = buildIndividualCases(byIndividual);
+  if (!spec) return { sql: '', affectedIds: new Set() };
+
+  const { idList, idCase, dobCase } = spec;
+  const changeFilter = `(
+   ${wouldChangeCondition('i.IDNumber', idCase)}
+   OR
+   ${wouldChangeCondition('i.DateOfBirth', dobCase)}
+  )`;
   const sql = `UPDATE members_prod.individual i
 SET
   i.IDNumber = ${idCase},
   i.DateOfBirth = ${dobCase}
-WHERE i.Id IN (${ids.join(',')});`;
+WHERE i.Id IN (${idList})
+  AND ${changeFilter};`;
 
-  return { sql, affectedIds: new Set(ids) };
+  const whereClause = `members_prod.individual i WHERE i.Id IN (${idList}) AND ${changeFilter}`;
+  const idWhere = `members_prod.individual i WHERE i.Id IN (${idList}) AND ${wouldChangeCondition('i.IDNumber', idCase)}`;
+  const dobWhere = `members_prod.individual i WHERE i.Id IN (${idList}) AND ${wouldChangeCondition('i.DateOfBirth', dobCase)}`;
+
+  return {
+    sql,
+    affectedIds: new Set(spec.ids),
+    countSql: countRowsSql(whereClause),
+    changingIdSql: `SELECT i.Id AS Id FROM ${idWhere}`,
+    changingDobSql: `SELECT i.Id AS Id FROM ${dobWhere}`,
+  };
 }
 
 /**
@@ -367,13 +439,19 @@ export function buildPolicyIdUpdate(policyToId) {
     .sort()
     .map((pol) => `'${pol.replace(/'/g, "''")}'`)
     .join(',');
+  const idCase = wrapCase(branches, 'p.IDNumber');
+  const changeFilter = wouldChangeCondition('p.IDNumber', idCase);
   const sql = `UPDATE policies_prod.policy p
-SET p.IDNumber =
-CASE
-${branches.join('\n')}
-ELSE p.IDNumber END
-WHERE p.UniquePolicyNumber IN (${polList});`;
-  return { sql, policies: new Set(policyToId.keys()) };
+SET p.IDNumber = ${idCase}
+WHERE p.UniquePolicyNumber IN (${polList})
+  AND ${changeFilter};`;
+  const whereClause = `policies_prod.policy p WHERE p.UniquePolicyNumber IN (${polList}) AND ${changeFilter}`;
+  return {
+    sql,
+    policies: new Set(policyToId.keys()),
+    countSql: countRowsSql(whereClause),
+    changingPoliciesSql: `SELECT p.UniquePolicyNumber AS UniquePolicyNumber FROM ${whereClause}`,
+  };
 }
 
 export function buildPreviewPolicyRolePlayerDob(groups) {

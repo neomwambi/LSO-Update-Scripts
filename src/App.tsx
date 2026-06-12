@@ -32,10 +32,13 @@ type ProcessResult = {
   previews?: Record<string, string>
   previewCounts?: Record<string, number | null>
   totalPreviewRows?: number | null
+  countParityVerified?: boolean | null
   message?: string
 }
 
-const SCRIPT_LABELS: { key: keyof NonNullable<ProcessResult['scripts']>; title: string }[] = [
+type ScriptKey = keyof NonNullable<ProcessResult['scripts']>
+
+const SCRIPT_LABELS: { key: ScriptKey; title: string }[] = [
   { key: 'policyroleplayer_dob', title: '1. policyroleplayer - DateOfBirth' },
   { key: 'policyroleplayer_id', title: '2. policyroleplayer - IDNumber' },
   { key: 'individual', title: '3. members_prod.individual' },
@@ -44,6 +47,33 @@ const SCRIPT_LABELS: { key: keyof NonNullable<ProcessResult['scripts']>; title: 
   { key: 'individual_searchmeta', title: '6. individual - SearchMetaInfo' },
   { key: 'policy_searchmeta', title: '7. policy - SearchMetaInfo' },
 ]
+
+const DATA_SCRIPT_LABELS = SCRIPT_LABELS.filter(({ key }) => !String(key).includes('searchmeta'))
+const SEARCHMETA_SCRIPT_LABELS = SCRIPT_LABELS.filter(({ key }) => String(key).includes('searchmeta'))
+
+function sumPreviewCounts(
+  labels: typeof SCRIPT_LABELS,
+  counts: ProcessResult['previewCounts']
+): number {
+  return labels.reduce((sum, { key }) => {
+    const n = counts?.[key]
+    return sum + (typeof n === 'number' ? n : 0)
+  }, 0)
+}
+
+function joinScriptBundle(
+  labels: typeof SCRIPT_LABELS,
+  scripts: ProcessResult['scripts'] | ProcessResult['previews'] | undefined
+): string {
+  return labels
+    .map(({ key, title }) => {
+      const sql = scripts?.[key]?.trim()
+      if (!sql) return null
+      return `-- ${title}\n${sql}`
+    })
+    .filter(Boolean)
+    .join('\n\n')
+}
 
 const defaultManual = {
   host: '127.0.0.1',
@@ -61,7 +91,9 @@ function App() {
   const [dbMessage, setDbMessage] = useState('')
   const [busy, setBusy] = useState(false)
   const [result, setResult] = useState<ProcessResult | null>(null)
-  const [activeTab, setActiveTab] = useState<string>('policyroleplayer_dob')
+  const [activeDataTab, setActiveDataTab] = useState<ScriptKey>('policyroleplayer_dob')
+  const [activeSearchMetaTab, setActiveSearchMetaTab] =
+    useState<ScriptKey>('policyroleplayer_searchmeta')
   const [copiedHint, setCopiedHint] = useState<string | null>(null)
   const [activeNav, setActiveNav] = useState<'home' | 'database' | 'excel' | 'results'>('home')
   const [menuOpen, setMenuOpen] = useState(false)
@@ -221,31 +253,125 @@ function App() {
     [flashCopied]
   )
 
-  const allUpdateScripts = result?.ok
-    ? SCRIPT_LABELS.map(({ key, title }) => {
-        const sql = result.scripts?.[key]?.trim()
-        if (!sql) return null
-        return `-- ${title}\n${sql}`
-      })
-        .filter(Boolean)
-        .join('\n\n')
+  const dataUpdateScripts = result?.ok ? joinScriptBundle(DATA_SCRIPT_LABELS, result.scripts) : ''
+  const dataPreviewScripts = result?.ok ? joinScriptBundle(DATA_SCRIPT_LABELS, result.previews) : ''
+  const searchMetaUpdateScripts = result?.ok
+    ? joinScriptBundle(SEARCHMETA_SCRIPT_LABELS, result.scripts)
+    : ''
+  const searchMetaPreviewScripts = result?.ok
+    ? joinScriptBundle(SEARCHMETA_SCRIPT_LABELS, result.previews)
     : ''
 
-  const allPreviewScripts = result?.ok
-    ? SCRIPT_LABELS.map(({ key, title }) => {
-        const sql = result.previews?.[key]?.trim()
-        if (!sql) return null
-        return `-- ${title}\n${sql}`
-      })
-        .filter(Boolean)
-        .join('\n\n')
-    : ''
+  const dataPreviewTotal = result?.previewCounts
+    ? sumPreviewCounts(DATA_SCRIPT_LABELS, result.previewCounts)
+    : 0
+  const searchMetaPreviewTotal = result?.previewCounts
+    ? sumPreviewCounts(SEARCHMETA_SCRIPT_LABELS, result.previewCounts)
+    : 0
 
-  const scriptKeys = SCRIPT_LABELS.map((s) => s.key)
-  const currentScript =
-    result?.scripts?.[activeTab as keyof NonNullable<ProcessResult['scripts']>] ?? ''
-  const currentPreview =
-    result?.previews?.[activeTab as keyof NonNullable<ProcessResult['previews']>] ?? ''
+  const currentDataScript = result?.scripts?.[activeDataTab] ?? ''
+  const currentDataPreview = result?.previews?.[activeDataTab] ?? ''
+  const currentSearchMetaScript = result?.scripts?.[activeSearchMetaTab] ?? ''
+  const currentSearchMetaPreview = result?.previews?.[activeSearchMetaTab] ?? ''
+
+  const renderScriptGroup = (
+    title: string,
+    labels: typeof SCRIPT_LABELS,
+    previewTotal: number,
+    updateBundle: string,
+    previewBundle: string,
+    activeTab: ScriptKey,
+    setActiveTab: (key: ScriptKey) => void,
+    currentScript: string,
+    currentPreview: string,
+    copyUpdateLabel: string,
+    copyPreviewLabel: string
+  ) => (
+    <div className="script-group">
+      <div className="script-group-head">
+        <h3 className="script-group-title">{title}</h3>
+        <span className="script-group-total">
+          Rows UPDATE will affect (same as preview): <strong>{previewTotal}</strong>
+        </span>
+      </div>
+
+      {result?.previewCounts && (
+        <ul className="count-list">
+          {labels.map(({ key, title: label }) => {
+            const n = result.previewCounts?.[key]
+            if (n == null) return null
+            return (
+              <li key={key}>
+                {label.replace(/^\d+\.\s*/, '')}: <strong>{n}</strong>
+              </li>
+            )
+          })}
+        </ul>
+      )}
+
+      <div className="copy-all-row">
+        <button
+          type="button"
+          className="btn primary"
+          disabled={!updateBundle}
+          onClick={() => copy(updateBundle, copyUpdateLabel)}
+        >
+          Copy UPDATE scripts
+        </button>
+        <button
+          type="button"
+          className="btn"
+          disabled={!previewBundle}
+          onClick={() => copy(previewBundle, copyPreviewLabel)}
+        >
+          Copy preview SELECTs
+        </button>
+      </div>
+
+      <div className="tabs">
+        {labels.map(({ key, title: label }) => (
+          <button
+            key={key}
+            type="button"
+            className={activeTab === key ? 'tab active' : 'tab'}
+            onClick={() => setActiveTab(key)}
+          >
+            {label.replace(/^\d+\.\s*/, '')}
+          </button>
+        ))}
+      </div>
+
+      <div className="script-block">
+        <div className="script-head">
+          <h3>UPDATE script</h3>
+          <button
+            type="button"
+            className="btn"
+            disabled={!currentScript}
+            onClick={() => copy(currentScript, 'UPDATE script copied to clipboard.')}
+          >
+            Copy
+          </button>
+        </div>
+        <pre className="sql">{currentScript || '- (nothing generated for this section)'}</pre>
+      </div>
+
+      <div className="script-block">
+        <div className="script-head">
+          <h3>Preview SELECT (same CASE logic)</h3>
+          <button
+            type="button"
+            className="btn"
+            disabled={!currentPreview}
+            onClick={() => copy(currentPreview, 'Preview SELECT copied to clipboard.')}
+          >
+            Copy
+          </button>
+        </div>
+        <pre className="sql">{currentPreview || '-'}</pre>
+      </div>
+    </div>
+  )
 
   return (
     <div className={`shell${menuOpen ? ' menu-open' : ''}`}>
@@ -354,8 +480,9 @@ function App() {
                 </li>
                 <li>Upload the Excel file. Fix any validation errors or warnings shown in the results area.</li>
                 <li>
-                  Review preview counts, then copy each script or <strong>Copy all</strong>. Run statements in
-                  your usual SQL client in the recommended order (data updates, then SearchMetaInfo).
+                  Review row counts (verified with read-only SELECT/COUNT when connected). Copy UPDATE and
+                  preview scripts and pass them to someone with write access. Run data updates first, then
+                  SearchMetaInfo.
                 </li>
               </ol>
             </div>
@@ -503,8 +630,9 @@ function App() {
         <h2>SQL output</h2>
         {!result && (
           <p className="hint">
-            Upload a spreadsheet after connecting to MySQL to see validation, preview counts, and generated
-            scripts.
+            Upload a spreadsheet after connecting to MySQL. A read-only login is enough: the app only runs
+            SELECT and COUNT queries, then builds UPDATE scripts for you to copy and hand to someone with
+            write access.
           </p>
         )}
         {result && (
@@ -547,23 +675,25 @@ function App() {
                 )}
                 {result.totalPreviewRows != null && (
                   <span className="highlight">
-                    Preview rows that would change (all scripts): {result.totalPreviewRows}
+                    Rows UPDATE will affect (all scripts): {result.totalPreviewRows}
                   </span>
                 )}
               </div>
 
-              {result.previewCounts && (
-                <ul className="count-list">
-                  {SCRIPT_LABELS.map(({ key, title }) => {
-                    const n = result.previewCounts?.[key]
-                    if (n == null) return null
-                    return (
-                      <li key={key}>
-                        {title}: <strong>{n}</strong>
-                      </li>
-                    )
-                  })}
-                </ul>
+              {result.countParityVerified === true && (
+                <p className="status ok parity-note">
+                  Read-only check passed. Nothing was updated in the database. Each UPDATE script is
+                  limited to the same rows as its preview SELECT, and the row counts match live data.
+                  SearchMetaInfo only covers rows that will receive a DOB/ID data change. Safe to copy
+                  and pass to a colleague with write access.
+                </p>
+              )}
+
+              {result.ok && result.countParityVerified == null && (
+                <p className="hint">
+                  Connect to MySQL (read-only is fine) before upload to verify row counts against live
+                  data. Without a connection, scripts are still generated but counts are not checked.
+                </p>
               )}
 
               {result.noMatch && result.noMatch.length > 0 && (
@@ -583,72 +713,33 @@ function App() {
                 </details>
               )}
 
-              <div className="copy-all-row">
-                <button
-                  type="button"
-                  className="btn primary"
-                  disabled={!allUpdateScripts}
-                  onClick={() => copy(allUpdateScripts, 'All UPDATE scripts copied to clipboard.')}
-                >
-                  Copy all UPDATE scripts
-                </button>
-                <button
-                  type="button"
-                  className="btn"
-                  disabled={!allPreviewScripts}
-                  onClick={() =>
-                    copy(allPreviewScripts, 'All preview SELECTs copied to clipboard.')
-                  }
-                >
-                  Copy all preview SELECTs
-                </button>
-              </div>
+              {renderScriptGroup(
+                'Data updates (DOB, ID, individual, policy)',
+                DATA_SCRIPT_LABELS,
+                dataPreviewTotal,
+                dataUpdateScripts,
+                dataPreviewScripts,
+                activeDataTab,
+                setActiveDataTab,
+                currentDataScript,
+                currentDataPreview,
+                'Data UPDATE scripts copied to clipboard.',
+                'Data preview SELECTs copied to clipboard.'
+              )}
 
-              <div className="tabs">
-                {scriptKeys.map((key) => {
-                  const label = SCRIPT_LABELS.find((s) => s.key === key)?.title ?? key
-                  return (
-                    <button
-                      key={key}
-                      type="button"
-                      className={activeTab === key ? 'tab active' : 'tab'}
-                      onClick={() => setActiveTab(key)}
-                    >
-                      {label.replace(/^\d+\.\s*/, '')}
-                    </button>
-                  )
-                })}
-              </div>
-
-              <div className="script-block">
-                <div className="script-head">
-                  <h3>UPDATE script</h3>
-                  <button
-                    type="button"
-                    className="btn"
-                    disabled={!currentScript}
-                    onClick={() => copy(currentScript, 'UPDATE script copied to clipboard.')}
-                  >
-                    Copy
-                  </button>
-                </div>
-                <pre className="sql">{currentScript || '- (nothing generated for this section)'}</pre>
-              </div>
-
-              <div className="script-block">
-                <div className="script-head">
-                  <h3>Preview SELECT (same CASE logic)</h3>
-                  <button
-                    type="button"
-                    className="btn"
-                    disabled={!currentPreview}
-                    onClick={() => copy(currentPreview, 'Preview SELECT copied to clipboard.')}
-                  >
-                    Copy
-                  </button>
-                </div>
-                <pre className="sql">{currentPreview || '-'}</pre>
-              </div>
+              {renderScriptGroup(
+                'SearchMetaInfo audit (data changes only)',
+                SEARCHMETA_SCRIPT_LABELS,
+                searchMetaPreviewTotal,
+                searchMetaUpdateScripts,
+                searchMetaPreviewScripts,
+                activeSearchMetaTab,
+                setActiveSearchMetaTab,
+                currentSearchMetaScript,
+                currentSearchMetaPreview,
+                'SearchMetaInfo UPDATE scripts copied to clipboard.',
+                'SearchMetaInfo preview SELECTs copied to clipboard.'
+              )}
             </>
           )}
 

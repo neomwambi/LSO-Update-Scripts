@@ -7,6 +7,7 @@ import {
   buildPolicyIdUpdate,
   classifyPolicyRolePlayerIds,
   classifyIndividualIds,
+  classifyFromChangingIdSets,
   buildPolicyRolePlayerSearchMetaUpdate,
   buildIndividualSearchMetaUpdate,
   buildPolicySearchMetaUpdate,
@@ -31,6 +32,97 @@ async function runCount(pool, countSql) {
   const [rows] = await pool.query(countSql);
   const n = rows[0]?.cnt;
   return typeof n === 'bigint' ? Number(n) : Number(n);
+}
+
+async function fetchNumericIds(pool, sql) {
+  if (!pool || !sql?.trim()) return new Set();
+  const [rows] = await pool.query(sql);
+  return new Set(rows.map((r) => Number(r.Id)));
+}
+
+async function fetchPolicyNumbers(pool, sql) {
+  if (!pool || !sql?.trim()) return new Set();
+  const [rows] = await pool.query(sql);
+  return new Set(rows.map((r) => String(r.UniquePolicyNumber)));
+}
+
+function unionClassSize(c) {
+  return c.dobOnly.size + c.idOnly.size + c.both.size;
+}
+
+/**
+ * SearchMetaInfo only for rows that will actually change in the data UPDATE scripts.
+ * @param {import('mysql2/promise').Pool | null} pool
+ */
+async function resolveSearchMetaTargets(
+  pool,
+  rpDob,
+  rpId,
+  individualForSql,
+  policyId,
+  prpDobScript,
+  prpIdScript,
+  indScript,
+  polScript
+) {
+  if (!pool) {
+    return {
+      prpClass: classifyPolicyRolePlayerIds(rpDob, rpId),
+      indClass: classifyIndividualIds(individualForSql),
+      policyForSm: policyId,
+      scopedByLiveData: false,
+    };
+  }
+
+  const dobChangingPrp = await fetchNumericIds(pool, prpDobScript.changingIdsSql);
+  const idChangingPrp = await fetchNumericIds(pool, prpIdScript.changingIdsSql);
+  const dobChangingInd = await fetchNumericIds(pool, indScript.changingDobSql);
+  const idChangingInd = await fetchNumericIds(pool, indScript.changingIdSql);
+  const changingPolicies = await fetchPolicyNumbers(pool, polScript.changingPoliciesSql);
+
+  const policyForSm = new Map();
+  for (const pol of changingPolicies) {
+    if (policyId.has(pol)) policyForSm.set(pol, policyId.get(pol));
+  }
+
+  return {
+    prpClass: classifyFromChangingIdSets(dobChangingPrp, idChangingPrp),
+    indClass: classifyFromChangingIdSets(dobChangingInd, idChangingInd),
+    policyForSm,
+    scopedByLiveData: true,
+  };
+}
+
+const SCRIPT_PARITY_CHECKS = [
+  { key: 'policyroleplayer_dob', label: 'policyroleplayer - DateOfBirth' },
+  { key: 'policyroleplayer_id', label: 'policyroleplayer - IDNumber' },
+  { key: 'individual', label: 'members_prod.individual' },
+  { key: 'policy_id', label: 'policy - IDNumber' },
+  { key: 'policyroleplayer_searchmeta', label: 'policyroleplayer - SearchMetaInfo' },
+  { key: 'individual_searchmeta', label: 'individual - SearchMetaInfo' },
+  { key: 'policy_searchmeta', label: 'policy - SearchMetaInfo' },
+];
+
+/**
+ * @param {import('mysql2/promise').Pool} pool
+ * @param {Record<string, string>} previewCountSqlByKey
+ * @param {Record<string, string>} updateCountSqlByKey
+ */
+async function verifyPreviewUpdateParity(pool, previewCountSqlByKey, updateCountSqlByKey) {
+  const warnings = [];
+  for (const { key, label } of SCRIPT_PARITY_CHECKS) {
+    const previewSql = previewCountSqlByKey[key];
+    const updateSql = updateCountSqlByKey[key];
+    if (!previewSql?.trim() && !updateSql?.trim()) continue;
+    const previewCount = await runCount(pool, previewSql);
+    const updateCount = await runCount(pool, updateSql);
+    if (previewCount !== updateCount) {
+      warnings.push(
+        `${label}: preview shows ${previewCount ?? '?'} row(s) but the UPDATE script would affect ${updateCount ?? '?'} row(s). Do not pass these scripts to anyone with write access until this is reviewed.`
+      );
+    }
+  }
+  return warnings;
 }
 
 /**
@@ -217,12 +309,39 @@ export async function processWorkbook(buffer, pool) {
   const indScript = buildIndividualUpdate(individualForSql);
   const polScript = buildPolicyIdUpdate(policyId);
 
-  const prpClass = classifyPolicyRolePlayerIds(rpDob, rpId);
-  const indClass = classifyIndividualIds(individualForSql);
+  const smTargets = await resolveSearchMetaTargets(
+    pool,
+    rpDob,
+    rpId,
+    individualForSql,
+    policyId,
+    prpDobScript,
+    prpIdScript,
+    indScript,
+    polScript
+  );
+  const { prpClass, indClass, policyForSm, scopedByLiveData } = smTargets;
+
+  if (scopedByLiveData) {
+    const excelPrp = classifyPolicyRolePlayerIds(rpDob, rpId);
+    const excelInd = classifyIndividualIds(individualForSql);
+    const prpSkipped = unionClassSize(excelPrp) - unionClassSize(prpClass);
+    const indSkipped = unionClassSize(excelInd) - unionClassSize(indClass);
+    const polSkipped = policyId.size - policyForSm.size;
+    if (prpSkipped > 0 || indSkipped > 0 || polSkipped > 0) {
+      warnings.push(
+        'SearchMetaInfo scripts only include rows that will receive a data change (verified with read-only queries). Rows already matching the Excel values are excluded.'
+      );
+    }
+  } else if (unionClassSize(prpClass) || unionClassSize(indClass) || policyId.size) {
+    warnings.push(
+      'No database connection: SearchMetaInfo is based on Excel targets only. Connect with read-only access to limit SearchMetaInfo to rows that would actually change in the database.'
+    );
+  }
 
   const prpSmScript = buildPolicyRolePlayerSearchMetaUpdate(prpClass);
   const indSmScript = buildIndividualSearchMetaUpdate(indClass);
-  const polSmScript = buildPolicySearchMetaUpdate(policyId);
+  const polSmScript = buildPolicySearchMetaUpdate(policyForSm);
 
   const prevPrpDob = buildPreviewPolicyRolePlayerDob(rpDob);
   const prevPrpId = buildPreviewPolicyRolePlayerId(rpId);
@@ -230,10 +349,31 @@ export async function processWorkbook(buffer, pool) {
   const prevPol = buildPreviewPolicy(policyId);
   const prevPrpSm = buildPreviewPolicyRolePlayerSearchMeta(prpClass);
   const prevIndSm = buildPreviewIndividualSearchMeta(indClass);
-  const prevPolSm = buildPreviewPolicySearchMeta(policyId);
+  const prevPolSm = buildPreviewPolicySearchMeta(policyForSm);
 
   let previewCounts = null;
   let totalPreviewRows = null;
+  let parityWarnings = [];
+
+  const previewCountSqlByKey = {
+    policyroleplayer_dob: prevPrpDob.countSql,
+    policyroleplayer_id: prevPrpId.countSql,
+    individual: prevInd.countSql,
+    policy_id: prevPol.countSql,
+    policyroleplayer_searchmeta: prevPrpSm.countSql,
+    individual_searchmeta: prevIndSm.countSql,
+    policy_searchmeta: prevPolSm.countSql,
+  };
+
+  const updateCountSqlByKey = {
+    policyroleplayer_dob: prpDobScript.countSql,
+    policyroleplayer_id: prpIdScript.countSql,
+    individual: indScript.countSql,
+    policy_id: polScript.countSql,
+    policyroleplayer_searchmeta: prpSmScript.countSql,
+    individual_searchmeta: indSmScript.countSql,
+    policy_searchmeta: polSmScript.countSql,
+  };
 
   if (pool) {
     const c1 = await runCount(pool, prevPrpDob.countSql);
@@ -253,6 +393,14 @@ export async function processWorkbook(buffer, pool) {
       policy_searchmeta: c7,
     };
     totalPreviewRows = (c1 ?? 0) + (c2 ?? 0) + (c3 ?? 0) + (c4 ?? 0) + (c5 ?? 0) + (c6 ?? 0) + (c7 ?? 0);
+
+    parityWarnings = await verifyPreviewUpdateParity(pool, previewCountSqlByKey, updateCountSqlByKey);
+    if (parityWarnings.length) {
+      warnings.push(
+        'Row-count check failed (read-only SELECT/COUNT): preview and UPDATE scripts would not affect the same number of rows for one or more sections. Do not hand off scripts until this is resolved.'
+      );
+      warnings.push(...parityWarnings);
+    }
   }
 
   return {
@@ -286,5 +434,6 @@ export async function processWorkbook(buffer, pool) {
     },
     previewCounts,
     totalPreviewRows,
+    countParityVerified: pool ? parityWarnings.length === 0 : null,
   };
 }
