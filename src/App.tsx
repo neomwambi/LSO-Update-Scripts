@@ -391,7 +391,7 @@ function App() {
               width={180}
               height={44}
             />
-            <span className="header-tagline">Lesotho benefit DOB / ID updates</span>
+            <span className="header-tagline">Client file update assistant</span>
           </div>
           <button
             type="button"
@@ -416,21 +416,21 @@ function App() {
               className={`nav-btn${activeNav === 'database' ? ' active' : ''}`}
               onClick={() => goTo('database', 'section-database')}
             >
-              Database
+              Connect
             </button>
             <button
               type="button"
               className={`nav-btn${activeNav === 'excel' ? ' active' : ''}`}
               onClick={() => goTo('excel', 'section-excel')}
             >
-              Upload spreadsheet
+              Upload file
             </button>
             <button
               type="button"
               className={`nav-btn${activeNav === 'results' ? ' active' : ''}`}
               onClick={() => goTo('results', 'section-results')}
             >
-              SQL output
+              Your scripts
             </button>
           </nav>
         </div>
@@ -446,45 +446,61 @@ function App() {
               width={200}
               height={260}
             />
-            <h1 className="hero-title">Lesotho benefit DOB / ID updates</h1>
+            <h1 className="hero-title">Lesotho benefit updates</h1>
             <p className="lede">
-              Prepare database updates from the client Excel file (columns A through F). With{' '}
-              <strong>VPN</strong> on, connect using your own MySQL user, upload the workbook, then copy
-              generated scripts for <code>policyroleplayer</code>, <code>individual</code>,{' '}
-              <code>policy</code>, and <code>SearchMetaInfo</code>.
+              Turn your client Excel file into ready-to-run update scripts. Connect, upload, and copy the
+              results for your team.
             </p>
 
-            <div className="feature-grid">
-              <div className="feature-card">
-                <h3>Database</h3>
-                <p>Test the connection and sign in with .env or your credentials.</p>
-                <button type="button" className="linkish" onClick={() => goTo('database', 'section-database')}>
-                  Go to Database
-                </button>
-              </div>
-              <div className="feature-card">
-                <h3>Upload spreadsheet</h3>
-                <p>Choose the Lesotho master template and generate SQL plus preview row counts.</p>
-                <button type="button" className="linkish" onClick={() => goTo('excel', 'section-excel')}>
-                  Choose file
-                </button>
-              </div>
-            </div>
+            {conn?.connected ? (
+              <p className="hero-status ok">You are connected. You can upload your file when you are ready.</p>
+            ) : (
+              <p className="hero-status">Start by connecting to the database below.</p>
+            )}
 
-            <div className="how-to">
-              <h2>How to use this tool</h2>
-              <ol>
-                <li>
-                  Connect to MySQL (same server as your team, your own username). Use <strong>Test</strong>{' '}
-                  or connect from <code>.env</code>.
-                </li>
-                <li>Upload the Excel file. Fix any validation errors or warnings shown in the results area.</li>
-                <li>
-                  Review row counts (verified with read-only SELECT/COUNT when connected). Copy UPDATE and
-                  preview scripts and pass them to someone with write access. Run data updates first, then
-                  SearchMetaInfo.
-                </li>
-              </ol>
+            <div className="steps-grid">
+              <article className="step-card">
+                <span className="step-num" aria-hidden>
+                  1
+                </span>
+                <h3>Connect</h3>
+                <p>Sign in with your own database details.</p>
+                <button
+                  type="button"
+                  className="btn step-btn"
+                  onClick={() => goTo('database', 'section-database')}
+                >
+                  Connect now
+                </button>
+              </article>
+              <article className="step-card">
+                <span className="step-num" aria-hidden>
+                  2
+                </span>
+                <h3>Upload</h3>
+                <p>Add the Lesotho master Excel file from the client.</p>
+                <button
+                  type="button"
+                  className="btn step-btn"
+                  onClick={() => goTo('excel', 'section-excel')}
+                >
+                  Upload file
+                </button>
+              </article>
+              <article className="step-card">
+                <span className="step-num" aria-hidden>
+                  3
+                </span>
+                <h3>Review and copy</h3>
+                <p>See how many rows will change, then copy the scripts to share.</p>
+                <button
+                  type="button"
+                  className="btn step-btn primary"
+                  onClick={() => goTo('results', 'section-results')}
+                >
+                  View scripts
+                </button>
+              </article>
             </div>
           </section>
 
@@ -760,13 +776,7 @@ function App() {
       {copiedHint && <p className="toast" role="status">{copiedHint}</p>}
 
       <footer className="footer">
-        <p>
-          Runs on your machine only. Use VPN before connecting to MySQL. Do not commit <code>.env</code>.
-        </p>
-        <p>
-          Each person runs this on their own PC: <code>npm.cmd run dev</code> (API on 3001, UI proxied).
-          Do not commit <code>.env</code> or share passwords. Same DB host, individual MySQL users.
-        </p>
+        <p>MobiLife internal tool. Use your own sign-in and keep passwords private.</p>
       </footer>
         </div>
       </main>
