@@ -6,8 +6,6 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const distPath = path.join(__dirname, '..', 'dist');
 import {
   getPool,
   testConnection,
@@ -17,6 +15,11 @@ import {
   reconnectFromEnvFile,
 } from './db.js';
 import { processWorkbook } from './processWorkbook.js';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const distPath = path.join(__dirname, '..', 'dist');
+const indexPath = path.join(distPath, 'index.html');
+const hasUi = fs.existsSync(indexPath);
 
 const app = express();
 const upload = multer({
@@ -117,21 +120,27 @@ app.post('/api/process', upload.single('file'), async (req, res) => {
   }
 });
 
-if (fs.existsSync(distPath)) {
-  app.use(express.static(distPath));
-  app.get(/^(?!\/api).*/, (req, res, next) => {
+if (hasUi) {
+  app.use(express.static(distPath, { index: 'index.html' }));
+}
+
+app.get('/', (req, res) => {
+  if (hasUi) {
+    return res.sendFile(indexPath);
+  }
+  res
+    .type('text/plain')
+    .send(
+      'LSO API is running. UI not built yet: run npm run build so dist/ exists before deploy.'
+    );
+});
+
+if (hasUi) {
+  app.get(/^\/(?!api\/).*/, (req, res, next) => {
     if (req.method !== 'GET' && req.method !== 'HEAD') return next();
-    res.sendFile(path.join(distPath, 'index.html'), (err) => {
+    res.sendFile(indexPath, (err) => {
       if (err) next(err);
     });
-  });
-} else {
-  app.get('/', (req, res) => {
-    res
-      .type('text/plain')
-      .send(
-        'LSO API is running. UI not built yet: run npm run build so dist/ exists before deploy.'
-      );
   });
 }
 
@@ -139,6 +148,9 @@ const PORT = Number(process.env.PORT || 3001);
 const LISTEN_HOST =
   process.env.LISTEN_HOST || (process.env.WEBSITE_SITE_NAME ? '0.0.0.0' : '127.0.0.1');
 app.listen(PORT, LISTEN_HOST, () => {
-  const ui = fs.existsSync(distPath) ? 'UI + API' : 'API only (no dist/)';
+  const ui = hasUi ? 'UI + API' : 'API only (no dist/index.html)';
   console.log(`LSO benefit update (${ui}): http://${LISTEN_HOST}:${PORT}`);
+  if (!hasUi) {
+    console.warn(`Missing ${indexPath}. Deploy must include npm run build output.`);
+  }
 });

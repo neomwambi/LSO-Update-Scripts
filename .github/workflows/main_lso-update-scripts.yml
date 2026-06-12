@@ -25,15 +25,19 @@ jobs:
 
       - name: npm install, build, and test
         run: |
-          npm install
-          npm run build --if-present
+          npm ci
+          npm run build
           npm run test --if-present
+          test -f dist/index.html
+          npm prune --production
 
       - name: Upload artifact for deployment job
         uses: actions/upload-artifact@v4
         with:
           name: node-app
-          path: .
+          path: |
+            .
+            !node_modules/.cache
 
   deploy:
     runs-on: ubuntu-latest
